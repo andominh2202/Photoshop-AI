@@ -1,0 +1,29 @@
+[package]
+name = "photoshop-ai"
+version = "0.1.0"
+description = "PhotoshopAI - Pro Non-Destructive Desktop Photo Editor"
+authors = ["NovaPhoto Team"]
+license = "MIT"
+repository = ""
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+ndarray = "0.16"
+ort = { version = "2.0.0-rc.9", default-features = false, features = ["download-binaries", "copy-dylibs", "directml"] }
+rayon = "1.10"
+tokio = { version = "1", features = ["full"] }
+thiserror = "2.0"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
