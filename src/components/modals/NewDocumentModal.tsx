@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { X, Sparkles, Monitor, Smartphone, Image as ImageIcon, Printer } from 'lucide-react';
 import { useEditorStore } from '@/store/useEditorStore';
 
@@ -18,8 +18,10 @@ const PRESETS: Preset[] = [
   { name: 'A4 Print (300 DPI)', width: 2480, height: 3508, dpi: 300, icon: Printer },
 ];
 
-export const NewDocumentModal: React.FC = () => {
-  const { isNewDocModalOpen, setNewDocModalOpen, createNewDocument } = useEditorStore();
+export const NewDocumentModal: React.FC = memo(() => {
+  const isNewDocModalOpen = useEditorStore((s) => s.isNewDocModalOpen);
+  const setNewDocModalOpen = useEditorStore((s) => s.setNewDocModalOpen);
+  const createNewDocument = useEditorStore((s) => s.createNewDocument);
 
   const [title, setTitle] = useState('Untitled-1.psai');
   const [width, setWidth] = useState(1920);
@@ -184,4 +186,4 @@ export const NewDocumentModal: React.FC = () => {
       </div>
     </div>
   );
-};
+});

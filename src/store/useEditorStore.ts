@@ -1,4 +1,16 @@
 import { create } from 'zustand';
+import { pixelRegistry } from './pixelStore';
+import { hotStore } from './hotStore';
+import type { Command } from '../history/commands';
+
+let _commandManagerInstance: typeof import('../history/commandManager').commandManager | null = null;
+async function getCommandManager() {
+  if (!_commandManagerInstance) {
+    const mod = await import('../history/commandManager');
+    _commandManagerInstance = mod.commandManager;
+  }
+  return _commandManagerInstance;
+}
 
 export type ToolType =
   | 'move'
@@ -82,8 +94,9 @@ export interface HistoryStep {
   actionName: string;
   timestamp: number;
   layers: LayerItem[];
-  strokes: PaintStroke[];
+  strokes?: PaintStroke[];
   activeLayerId: string;
+  bytes?: number;
 }
 
 export interface AiTaskState {
@@ -141,12 +154,14 @@ interface EditorState {
   // History Stack
   history: HistoryStep[];
   historyIndex: number;
+  historyBytes: number;
   strokes: PaintStroke[];
   addStroke: (stroke: PaintStroke) => void;
 
   // Modals
   isNewDocModalOpen: boolean;
   isExportModalOpen: boolean;
+  isInpaintingModalOpen: boolean;
 
   // Actions
   setDocTitle: (title: string) => void;
@@ -205,12 +220,14 @@ interface EditorState {
   // History Actions
   pushHistory: (actionName: string) => void;
   jumpToHistory: (index: number) => void;
+  executeCommand: (cmd: Command, alreadyExecuted?: boolean) => Promise<void>;
   undo: () => void;
   redo: () => void;
 
   // Modal controls
   setNewDocModalOpen: (open: boolean) => void;
   setExportModalOpen: (open: boolean) => void;
+  setInpaintingModalOpen: (open: boolean) => void;
 }
 
 // Built-in offline SVG demo layers to eliminate external network/CORS issues
@@ -290,6 +307,16 @@ const INITIAL_LAYERS: LayerItem[] = [
   },
 ];
 
+const MAX_HISTORY_STEPS = 30;
+
+function cloneLayersMetadata(layers: LayerItem[]): LayerItem[] {
+  return layers.map((layer) => ({
+    ...layer,
+    data: undefined, // Never store heavy binary byte buffers in history snapshots
+    adjustments: { ...layer.adjustments },
+  }));
+}
+
 export const useEditorStore = create<EditorState>((set, get) => ({
   docTitle: 'Untitled-1.psai',
   docWidth: 1920,
@@ -338,17 +365,24 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       actionName: 'Open Document',
       timestamp: Date.now(),
       layers: INITIAL_LAYERS,
+      strokes: [],
       activeLayerId: 'layer-ai-subject',
     },
   ],
   historyIndex: 0,
+  historyBytes: 0,
+  strokes: [],
+  addStroke: (stroke) => set((state) => ({ strokes: [...state.strokes, stroke] })),
 
   isNewDocModalOpen: false,
   isExportModalOpen: false,
+  isInpaintingModalOpen: false,
 
   setDocTitle: (docTitle) => set({ docTitle }),
 
   createNewDocument: (width, height, dpi, title = 'Untitled.psai', bg = '#ffffff') => {
+    _commandManagerInstance?.clear();
+    pixelRegistry.clearAll();
     const blankLayer: LayerItem = {
       id: `layer-${Date.now()}`,
       name: 'Background',
@@ -381,9 +415,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           timestamp: Date.now(),
           layers: [blankLayer],
           activeLayerId: blankLayer.id,
+          bytes: 0,
         },
       ],
       historyIndex: 0,
+      historyBytes: 0,
       isNewDocModalOpen: false,
     });
     get().resetView();
@@ -418,27 +454,80 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   pushHistory: (actionName: string) => {
     const { layers, activeLayerId, history, historyIndex } = get();
     const newStep: HistoryStep = {
-      id: `step-${Date.now()}`,
+      id: `step-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       actionName,
       timestamp: Date.now(),
-      layers: JSON.parse(JSON.stringify(layers)),
+      layers: cloneLayersMetadata(layers),
+      strokes: [],
       activeLayerId,
+      bytes: 0,
     };
     const sliced = history.slice(0, historyIndex + 1);
+    const updated = [...sliced, newStep];
+    const finalHistory =
+      updated.length > MAX_HISTORY_STEPS
+        ? updated.slice(updated.length - MAX_HISTORY_STEPS)
+        : updated;
     set({
-      history: [...sliced, newStep],
-      historyIndex: sliced.length,
+      history: finalHistory,
+      historyIndex: finalHistory.length - 1,
+      historyBytes: _commandManagerInstance?.getTotalBytes() ?? 0,
+    });
+  },
+
+  executeCommand: async (cmd: Command, alreadyExecuted = false) => {
+    const cm = await getCommandManager();
+    await cm.executeCommand(cmd, alreadyExecuted);
+    const { history, historyIndex, layers, activeLayerId } = get();
+    const newStep: HistoryStep = {
+      id: cmd.id,
+      actionName: cmd.description,
+      timestamp: Date.now(),
+      layers: cloneLayersMetadata(layers),
+      strokes: [],
+      activeLayerId,
+      bytes: cmd.estimateBytes(),
+    };
+    const sliced = history.slice(0, historyIndex + 1);
+    const updated = [...sliced, newStep];
+    const finalHistory =
+      updated.length > MAX_HISTORY_STEPS
+        ? updated.slice(updated.length - MAX_HISTORY_STEPS)
+        : updated;
+    set({
+      history: finalHistory,
+      historyIndex: finalHistory.length - 1,
+      historyBytes: cm.getTotalBytes(),
     });
   },
 
   jumpToHistory: (index: number) => {
-    const { history } = get();
+    const { history, historyIndex } = get();
     if (index >= 0 && index < history.length) {
+      if (_commandManagerInstance && (_commandManagerInstance.getUndoCount() > 0 || _commandManagerInstance.getRedoCount() > 0)) {
+        const delta = index - historyIndex;
+        if (delta < 0) {
+          for (let i = 0; i < Math.abs(delta); i++) {
+            if (_commandManagerInstance.canUndo()) _commandManagerInstance.undo();
+          }
+        } else if (delta > 0) {
+          for (let i = 0; i < delta; i++) {
+            if (_commandManagerInstance.canRedo()) _commandManagerInstance.redo();
+          }
+        }
+      }
       const step = history[index];
+      const restored = step.layers.map((l) => ({
+        ...l,
+        data: pixelRegistry.getLayerBytes(l.id),
+        textureUrl: pixelRegistry.getLayerUrl(l.id) || l.textureUrl,
+        adjustments: { ...l.adjustments },
+      }));
       set({
-        layers: JSON.parse(JSON.stringify(step.layers)),
+        layers: restored,
         activeLayerId: step.activeLayerId,
         historyIndex: index,
+        historyBytes: _commandManagerInstance?.getTotalBytes() ?? 0,
       });
     }
   },
@@ -463,6 +552,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     };
 
     const newLayers = [newLayer, ...state.layers];
+    if (partial?.data && partial.data.byteLength > 0) {
+      pixelRegistry.setLayerBytes(newLayer.id, partial.data, 'image/png', state.docWidth, state.docHeight);
+    }
     set({
       layers: newLayers,
       activeLayerId: newLayer.id,
@@ -504,12 +596,22 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const target = state.layers.find((l) => l.id === id);
     if (!target) return;
 
+    const newId = `layer-${Date.now()}`;
+    const existingBytes = pixelRegistry.getLayerBytes(id);
+    let newUrl = target.textureUrl;
+    if (existingBytes) {
+      newUrl = pixelRegistry.setLayerBytes(newId, new Uint8Array(existingBytes));
+    }
+
     const copy: LayerItem = {
-      ...JSON.parse(JSON.stringify(target)),
-      id: `layer-${Date.now()}`,
+      ...target,
+      id: newId,
       name: `${target.name} copy`,
       x: target.x + 20,
       y: target.y + 20,
+      data: undefined,
+      textureUrl: newUrl,
+      adjustments: { ...target.adjustments },
     };
 
     const targetIdx = state.layers.findIndex((l) => l.id === id);
@@ -522,6 +624,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   removeLayer: (id) => {
     const state = get();
+    const targetIdx = state.layers.findIndex((l) => l.id === id);
+    if (targetIdx === -1) return;
+    const targetLayer = state.layers[targetIdx];
+
     if (state.layers.length <= 1) {
       const resetLayer: LayerItem = {
         id: `layer-${Date.now()}`,
@@ -542,12 +648,16 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       get().pushHistory('Clear and Reset Layer');
       return;
     }
-    const filtered = state.layers.filter((l) => l.id !== id);
-    set({
-      layers: filtered,
-      activeLayerId: filtered[0]?.id || '',
+
+    import('../history/commands').then(({ DeleteLayerCommand }) => {
+      const cmd = new DeleteLayerCommand(
+        targetLayer,
+        targetIdx,
+        undefined,
+        `Xóa layer: ${targetLayer.name}`
+      );
+      get().executeCommand(cmd);
     });
-    get().pushHistory('Delete Layer');
   },
 
   mergeDown: (id) => {
@@ -610,9 +720,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
 
   updateLayerData: (id, data, textureUrl) => {
-    set((state) => ({
-      layers: state.layers.map((l) =>
-        l.id === id ? { ...l, data, textureUrl: textureUrl ?? l.textureUrl } : l
+    const state = get();
+    let finalUrl = textureUrl;
+    if (data && data.length > 0) {
+      if (!finalUrl) {
+        finalUrl = pixelRegistry.setLayerBytes(id, data, 'image/png', state.docWidth, state.docHeight);
+      } else {
+        pixelRegistry.setLayerDimensions(id, state.docWidth, state.docHeight);
+      }
+    }
+    set((s) => ({
+      layers: s.layers.map((l) =>
+        l.id === id ? { ...l, textureUrl: finalUrl ?? l.textureUrl, data: undefined } : l
       ),
     }));
     get().pushHistory('Update Layer Data');
@@ -698,22 +817,36 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       aiState: { ...state.aiState, ...aiState },
     })),
 
-  setFps: (fps) => set({ fps }),
+  setFps: (fps) => {
+    hotStore.setMetrics({ fps });
+    set((state) => (state.fps === fps ? state : { fps }));
+  },
 
   undo: () => {
     const { historyIndex } = get();
-    if (historyIndex > 0) {
+    if (_commandManagerInstance && _commandManagerInstance.canUndo()) {
+      _commandManagerInstance.undo();
+      if (historyIndex > 0) {
+        get().jumpToHistory(historyIndex - 1);
+      }
+    } else if (historyIndex > 0) {
       get().jumpToHistory(historyIndex - 1);
     }
   },
 
   redo: () => {
     const { history, historyIndex } = get();
-    if (historyIndex < history.length - 1) {
+    if (_commandManagerInstance && _commandManagerInstance.canRedo()) {
+      _commandManagerInstance.redo();
+      if (historyIndex < history.length - 1) {
+        get().jumpToHistory(historyIndex + 1);
+      }
+    } else if (historyIndex < history.length - 1) {
       get().jumpToHistory(historyIndex + 1);
     }
   },
 
   setNewDocModalOpen: (isNewDocModalOpen) => set({ isNewDocModalOpen }),
   setExportModalOpen: (isExportModalOpen) => set({ isExportModalOpen }),
+  setInpaintingModalOpen: (isInpaintingModalOpen) => set({ isInpaintingModalOpen }),
 }));

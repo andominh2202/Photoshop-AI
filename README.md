@@ -154,6 +154,92 @@ npm run tauri:build
 
 ---
 
+## 🔄 Dual-Runtime Auto-Updater & Security
+
+PhotoshopAI features an integrated auto-updater for both desktop runtimes via a unified platform abstraction layer (`src/platform/api.ts`):
+- **Tauri v2**: Powered by `tauri-plugin-updater` with Ed25519/Minisign cryptographic signature verification.
+- **Electron**: Powered by `electron-updater` querying GitHub Releases manifest.
+- **UI Experience**: Non-modal top banner (`UpdateNotificationBanner.tsx`) displays version changes and a live progress bar without blocking work. Dismissed versions are saved to `localStorage` (`photoshopai_dismissed_update`).
+
+### 🔐 Security & Signature Verification
+
+- **Tauri Cryptographic Verification**:
+  Updates are verified against the Minisign public key configured in `src-tauri/tauri.conf.json`:
+  ```json
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVFMkU0MUI3OTkzMzVBNUMKUldTU0tZUXpnOU15eEZoZGFhVWtGTVVLM3R4cW1wR3p6ZlYvTlhOdnBNNjlqNWV6Z0E1c3QzK0IK",
+      "endpoints": ["https://github.com/andominh2202/Photoshop-AI/releases/latest/download/latest.json"]
+    }
+  }
+  ```
+  Any tampering or signature mismatch aborts update installation.
+
+- **Electron Code Signing Notice**:
+  Windows binary distribution through `electron-builder` requires an Authenticode Code Signing Certificate (`CSC_LINK` and `CSC_KEY_PASSWORD` environment variables in CI). In development and un-signed CI environments, builds are unsigned and SmartScreen may trigger warnings until an EV/OV code signing certificate is added to the repository secrets.
+
+---
+
+## 🚀 CI/CD Release Workflows (GitHub Actions)
+
+### 1. Tauri Windows Release Workflow
+```yaml
+name: Release Tauri App
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release-tauri:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm install
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'PhotoshopAI v__VERSION__'
+          releaseBody: 'See changelog for release notes.'
+```
+
+### 2. Electron Release Workflow
+```yaml
+name: Release Electron App
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release-electron:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: Build and Publish Electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: npx electron-builder --win --publish always
+```
+
+---
+
 ## 📄 License
 
 This project is open-source and available under the [MIT License](LICENSE).
+

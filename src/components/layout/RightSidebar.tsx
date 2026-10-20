@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, memo, Suspense, lazy } from 'react';
 import { LayerPanel } from '@/components/panels/LayerPanel';
-import { AdjustmentsPanel } from '@/components/panels/AdjustmentsPanel';
-import { HistoryPanel } from '@/components/panels/HistoryPanel';
-import { Layers, History, Sliders } from 'lucide-react';
+import { Layers, History } from 'lucide-react';
 
-export const RightSidebar: React.FC = () => {
+const AdjustmentsPanel = lazy(() =>
+  import('@/components/panels/AdjustmentsPanel').then((m) => ({ default: m.AdjustmentsPanel }))
+);
+const HistoryPanel = lazy(() =>
+  import('@/components/panels/HistoryPanel').then((m) => ({ default: m.HistoryPanel }))
+);
+
+export const RightSidebar: React.FC = memo(() => {
   const [activeTab, setActiveTab] = useState<'layers' | 'history'>('layers');
 
   return (
@@ -38,13 +43,21 @@ export const RightSidebar: React.FC = () => {
 
       {/* Main Tab Body */}
       <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-        {activeTab === 'layers' ? <LayerPanel /> : <HistoryPanel />}
+        {activeTab === 'layers' ? (
+          <LayerPanel />
+        ) : (
+          <Suspense fallback={<div className="flex-1 flex items-center justify-center text-xs text-zinc-500 animate-pulse">Loading history...</div>}>
+            <HistoryPanel />
+          </Suspense>
+        )}
       </div>
 
       {/* Bottom Fixed Adjustments Panel */}
-      <div className="shrink-0">
-        <AdjustmentsPanel />
+      <div className="shrink-0 min-h-[140px]">
+        <Suspense fallback={<div className="h-36 bg-zinc-950 border-t border-zinc-800/80 flex items-center justify-center text-xs text-zinc-500 animate-pulse">Loading adjustments...</div>}>
+          <AdjustmentsPanel />
+        </Suspense>
       </div>
     </aside>
   );
-};
+});

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { memo } from 'react';
 import {
   Paintbrush,
   Eraser,
@@ -17,28 +17,28 @@ import {
 } from 'lucide-react';
 import { useEditorStore } from '@/store/useEditorStore';
 
-export const ToolOptionsBar: React.FC = () => {
-  const {
-    activeTool,
-    brushSize,
-    setBrushSize,
-    brushHardness,
-    setBrushHardness,
-    brushOpacity,
-    setBrushOpacity,
-    brushColor,
-    setBrushColor,
-    textFont,
-    setTextFont,
-    textSize,
-    setTextSize,
-    shapeType,
-    setShapeType,
-    selection,
-    clearSelection,
-    addTextLayer,
-    aiState,
-  } = useEditorStore();
+export const ToolOptionsBar: React.FC = memo(() => {
+  const activeTool = useEditorStore((s) => s.activeTool);
+  const brushSize = useEditorStore((s) => s.brushSize);
+  const brushHardness = useEditorStore((s) => s.brushHardness);
+  const brushOpacity = useEditorStore((s) => s.brushOpacity);
+  const brushColor = useEditorStore((s) => s.brushColor);
+  const textFont = useEditorStore((s) => s.textFont);
+  const textSize = useEditorStore((s) => s.textSize);
+  const shapeType = useEditorStore((s) => s.shapeType);
+  const selection = useEditorStore((s) => s.selection);
+  const isAiProcessing = useEditorStore((s) => s.aiState.isProcessing);
+  const aiMessage = useEditorStore((s) => s.aiState.message);
+
+  const setBrushSize = useEditorStore((s) => s.setBrushSize);
+  const setBrushHardness = useEditorStore((s) => s.setBrushHardness);
+  const setBrushOpacity = useEditorStore((s) => s.setBrushOpacity);
+  const setBrushColor = useEditorStore((s) => s.setBrushColor);
+  const setTextFont = useEditorStore((s) => s.setTextFont);
+  const setTextSize = useEditorStore((s) => s.setTextSize);
+  const setShapeType = useEditorStore((s) => s.setShapeType);
+  const clearSelection = useEditorStore((s) => s.clearSelection);
+  const addTextLayer = useEditorStore((s) => s.addTextLayer);
 
   return (
     <div className="h-9 bg-zinc-900 border-b border-zinc-800 flex items-center px-3 text-xs text-zinc-300 gap-4 select-none overflow-x-auto z-25">
@@ -202,8 +202,8 @@ export const ToolOptionsBar: React.FC = () => {
         </div>
       )}
 
-      {/* 5. AI RMBG & AI Inpaint Options */}
-      {(activeTool === 'ai-rmbg' || activeTool === 'ai-inpaint') && (
+      {/* 5. AI RMBG Options */}
+      {activeTool === 'ai-rmbg' && (
         <div className="flex items-center gap-3 shrink-0">
           <div className="flex items-center gap-1.5 text-blue-400 font-medium">
             <Sparkles className="w-3.5 h-3.5" />
@@ -212,6 +212,23 @@ export const ToolOptionsBar: React.FC = () => {
           <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/10 text-blue-300 rounded border border-blue-500/20 font-mono">
             Zero-Copy IPC
           </span>
+        </div>
+      )}
+
+      {/* 5b. AI Inpainting Options */}
+      {activeTool === 'ai-inpaint' && (
+        <div className="flex items-center gap-4 shrink-0">
+          <div className="flex items-center gap-1.5 text-purple-400 font-medium">
+            <Sparkles className="w-3.5 h-3.5" />
+            <span className="text-[11px]">LaMa Inpainting (DirectML)</span>
+          </div>
+          <button
+            onClick={() => useEditorStore.getState().setInpaintingModalOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded text-[11px] font-medium shadow-xs transition cursor-pointer"
+          >
+            <Sparkles className="w-3 h-3" />
+            <span>Apply Inpainting...</span>
+          </button>
         </div>
       )}
 
@@ -230,4 +247,4 @@ export const ToolOptionsBar: React.FC = () => {
       )}
     </div>
   );
-};
+});

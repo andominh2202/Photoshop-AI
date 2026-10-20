@@ -1,9 +1,18 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { useEditorStore } from '@/store/useEditorStore';
+import { useHotMetrics } from '@/store/hotStore';
 import { Activity, ShieldCheck, Zap } from 'lucide-react';
 
-export const StatusBar: React.FC = () => {
-  const { docWidth, docHeight, dpi, fps, zoom, activeTool } = useEditorStore();
+export const StatusBar: React.FC = memo(() => {
+  // Narrow selectors: only re-render if document dimensions or active tool change
+  const docWidth = useEditorStore((s) => s.docWidth);
+  const docHeight = useEditorStore((s) => s.docHeight);
+  const dpi = useEditorStore((s) => s.dpi);
+  const activeTool = useEditorStore((s) => s.activeTool);
+
+  // High-frequency telemetry: decoupled from React state, updates at max 10Hz without re-rendering other components!
+  const fps = useHotMetrics((m) => m.fps);
+  const zoom = useHotMetrics((m) => m.zoom);
 
   return (
     <footer className="h-6 bg-zinc-950 border-t border-zinc-800/80 flex items-center justify-between px-3 text-[11px] text-zinc-400 select-none z-30 font-mono">
@@ -11,7 +20,9 @@ export const StatusBar: React.FC = () => {
       <div className="flex items-center gap-3">
         <span className="flex items-center gap-1.5 text-zinc-300">
           <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
-          <span>{docWidth} × {docHeight} px</span>
+          <span>
+            {docWidth} × {docHeight} px
+          </span>
           <span className="text-zinc-600">|</span>
           <span>{dpi} DPI</span>
         </span>
@@ -46,4 +57,4 @@ export const StatusBar: React.FC = () => {
       </div>
     </footer>
   );
-};
+});

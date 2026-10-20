@@ -1,33 +1,32 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, Suspense, lazy } from 'react';
+import { UpdateNotificationBanner } from '@/components/layout/UpdateNotificationBanner';
 import { TopMenuBar } from '@/components/layout/TopMenuBar';
 import { ToolOptionsBar } from '@/components/layout/ToolOptionsBar';
 import { Toolbar } from '@/components/layout/Toolbar';
 import { PixiCanvas } from '@/canvas/PixiCanvas';
 import { RightSidebar } from '@/components/layout/RightSidebar';
 import { StatusBar } from '@/components/layout/StatusBar';
-import { NewDocumentModal } from '@/components/modals/NewDocumentModal';
-import { ExportModal } from '@/components/modals/ExportModal';
 import { useEditorStore } from '@/store/useEditorStore';
 
-export const App: React.FC = () => {
-  const {
-    undo,
-    redo,
-    setNewDocModalOpen,
-    setExportModalOpen,
-    duplicateLayer,
-    activeLayerId,
-    clearSelection,
-    resetView,
-    setActiveTool,
-    swapColors,
-    invertLayerColors,
-    moveLayerUp,
-    moveLayerDown,
-    deleteActiveLayer,
-  } = useEditorStore();
+import { ToastContainer } from '@/components/common/ToastContainer';
 
-  // Global Photoshop Hotkeys Listener
+import { KeyboardProvider, useKeyboardContext } from '@/context/KeyboardContext';
+
+// Code-split modals via React.lazy to reduce initial bundle evaluation overhead
+const NewDocumentModal = lazy(() =>
+  import('@/components/modals/NewDocumentModal').then((m) => ({ default: m.NewDocumentModal }))
+);
+const ExportModal = lazy(() =>
+  import('@/components/modals/ExportModal').then((m) => ({ default: m.ExportModal }))
+);
+const InpaintingModal = lazy(() =>
+  import('@/components/modals/InpaintingModal').then((m) => ({ default: m.InpaintingModal }))
+);
+
+const AppContent: React.FC = () => {
+  const { isSpacePressedRef } = useKeyboardContext();
+
+  // Global Photoshop Hotkeys Listener: use store.getState() to avoid subscribing App to any state
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignore if user is currently typing in an input or textarea
@@ -39,96 +38,134 @@ export const App: React.FC = () => {
         return;
       }
 
+      // Track Spacebar for temporary pan mode without preventing default in text fields
+      if (e.code === 'Space' || e.key === ' ') {
+        if (isSpacePressedRef.current !== undefined) {
+          (isSpacePressedRef as React.MutableRefObject<boolean>).current = true;
+        }
+      }
+
       const ctrlOrCmd = e.ctrlKey || e.metaKey;
+      const state = useEditorStore.getState();
 
       if (ctrlOrCmd) {
+        // 1. Ctrl/Cmd + S: Prevent OS save HTML dialog and open export dialog
+        if (e.key === 's' || e.key === 'S') {
+          e.preventDefault();
+          e.stopPropagation();
+          state.setExportModalOpen(true);
+          return;
+        }
+
         if (e.key === 'z' || e.key === 'Z') {
           e.preventDefault();
           if (e.shiftKey) {
-            redo();
+            state.redo();
           } else {
-            undo();
+            state.undo();
           }
         } else if (e.key === 'y' || e.key === 'Y') {
           e.preventDefault();
-          redo();
+          state.redo();
         } else if (e.key === 'n' || e.key === 'N') {
           e.preventDefault();
-          setNewDocModalOpen(true);
+          state.setNewDocModalOpen(true);
         } else if (e.key === 'e' || e.key === 'E') {
           if (e.shiftKey) {
             e.preventDefault();
-            setExportModalOpen(true);
+            state.setExportModalOpen(true);
           }
         } else if (e.key === 'j' || e.key === 'J') {
           e.preventDefault();
-          if (activeLayerId) duplicateLayer(activeLayerId);
+          if (state.activeLayerId) state.duplicateLayer(state.activeLayerId);
         } else if (e.key === 'd' || e.key === 'D') {
           e.preventDefault();
-          clearSelection();
+          state.clearSelection();
         } else if (e.key === '0') {
           e.preventDefault();
-          resetView();
+          state.resetView();
         } else if (e.key === 'i' || e.key === 'I') {
           e.preventDefault();
-          if (activeLayerId) invertLayerColors(activeLayerId);
+          if (state.activeLayerId) state.invertLayerColors(state.activeLayerId);
         } else if (e.key === ']') {
           e.preventDefault();
-          if (activeLayerId) moveLayerUp(activeLayerId);
+          if (state.activeLayerId) state.moveLayerUp(state.activeLayerId);
         } else if (e.key === '[') {
           e.preventDefault();
-          if (activeLayerId) moveLayerDown(activeLayerId);
+          if (state.activeLayerId) state.moveLayerDown(state.activeLayerId);
         } else if (e.key === 't' || e.key === 'T') {
           e.preventDefault();
-          setActiveTool('move');
+          state.setActiveTool('move');
         }
       } else {
         if (e.key === 'Delete' || e.key === 'Backspace') {
           e.preventDefault();
-          deleteActiveLayer();
+          state.deleteActiveLayer();
+          return;
+        }
+
+        // 2. Brush size hotkeys: [ to decrease, ] to increase (1 to 500)
+        if (e.key === '[') {
+          e.preventDefault();
+          const current = state.brushSize;
+          const next = Math.max(1, current <= 10 ? current - 1 : current <= 50 ? current - 5 : current - 10);
+          state.setBrushSize(next);
+          return;
+        }
+        if (e.key === ']') {
+          e.preventDefault();
+          const current = state.brushSize;
+          const next = Math.min(500, current < 10 ? current + 1 : current < 50 ? current + 5 : current + 10);
+          state.setBrushSize(next);
           return;
         }
 
         // Single Key Photoshop Tools
         switch (e.key.toLowerCase()) {
           case 'v':
-            setActiveTool('move');
+            state.setActiveTool('move');
             break;
           case 'm':
-            setActiveTool('marquee');
+            state.setActiveTool('marquee');
             break;
           case 'w':
-            setActiveTool('wand');
+            state.setActiveTool('wand');
             break;
           case 'c':
-            setActiveTool('crop');
+            state.setActiveTool('crop');
             break;
           case 'i':
-            setActiveTool('eyedropper');
+            state.setActiveTool('eyedropper');
             break;
           case 'b':
-            setActiveTool('brush');
+            state.setActiveTool('brush');
             break;
           case 'e':
-            setActiveTool('eraser');
+            state.setActiveTool('eraser');
             break;
           case 'g':
-            setActiveTool('paint-bucket');
+            state.setActiveTool('paint-bucket');
             break;
           case 't':
-            setActiveTool('text');
+            state.setActiveTool('text');
             break;
           case 'u':
-            setActiveTool('shape');
+            state.setActiveTool('shape');
+            break;
+          case 'r':
+            state.setActiveTool('ai-rmbg');
+            break;
+          case 'j':
+            state.setActiveTool('ai-inpaint');
             break;
           case 'h':
-            setActiveTool('hand');
+            state.setActiveTool('hand');
             break;
           case 'z':
-            setActiveTool('zoom');
+            state.setActiveTool('zoom');
             break;
           case 'x':
-            swapColors();
+            state.swapColors();
             break;
           default:
             break;
@@ -136,27 +173,27 @@ export const App: React.FC = () => {
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space' || e.key === ' ') {
+        if (isSpacePressedRef.current !== undefined) {
+          (isSpacePressedRef as React.MutableRefObject<boolean>).current = false;
+        }
+      }
+    };
+
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    undo,
-    redo,
-    setNewDocModalOpen,
-    setExportModalOpen,
-    duplicateLayer,
-    activeLayerId,
-    clearSelection,
-    resetView,
-    setActiveTool,
-    swapColors,
-    invertLayerColors,
-    moveLayerUp,
-    moveLayerDown,
-    deleteActiveLayer,
-  ]);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [isSpacePressedRef]);
 
   return (
     <div className="flex flex-col w-screen h-screen overflow-hidden bg-zinc-950 text-zinc-100 select-none">
+      {/* 0. Non-blocking Auto-Update Notification Banner */}
+      <UpdateNotificationBanner />
+
       {/* 1. Photoshop Desktop Top Menu Bar */}
       <TopMenuBar />
 
@@ -180,10 +217,24 @@ export const App: React.FC = () => {
       {/* 4. Bottom Diagnostics & Engine Status Bar */}
       <StatusBar />
 
-      {/* 5. Photoshop Modals */}
-      <NewDocumentModal />
-      <ExportModal />
+      {/* 5. Photoshop Modals (Lazy Loaded) */}
+      <Suspense fallback={null}>
+        <NewDocumentModal />
+        <ExportModal />
+        <InpaintingModal />
+      </Suspense>
+
+      {/* 6. Global User Feedback Toasts */}
+      <ToastContainer />
     </div>
+  );
+};
+
+export const App: React.FC = () => {
+  return (
+    <KeyboardProvider>
+      <AppContent />
+    </KeyboardProvider>
   );
 };
 

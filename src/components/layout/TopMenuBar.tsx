@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import {
   Undo2,
   Redo2,
@@ -15,36 +15,36 @@ import {
   Ruler,
 } from 'lucide-react';
 import { useEditorStore } from '@/store/useEditorStore';
+import { useHotMetrics } from '@/store/hotStore';
 
-export const TopMenuBar: React.FC = () => {
-  const {
-    docTitle,
-    zoom,
-    setZoom,
-    resetView,
-    toggleRulers,
-    showRulers,
-    undo,
-    redo,
-    history,
-    historyIndex,
-    fps,
-    gpuBackend,
-    setNewDocModalOpen,
-    setExportModalOpen,
-    addLayer,
-    duplicateLayer,
-    activeLayerId,
-    invertLayerColors,
-    desaturateLayer,
-    clearSelection,
-  } = useEditorStore();
+export const TopMenuBar: React.FC = memo(() => {
+  const docTitle = useEditorStore((s) => s.docTitle);
+  const showRulers = useEditorStore((s) => s.showRulers);
+  const canUndo = useEditorStore((s) => s.historyIndex > 0);
+  const canRedo = useEditorStore((s) => s.historyIndex < s.history.length - 1);
+  const activeLayerId = useEditorStore((s) => s.activeLayerId);
+  const gpuBackend = useEditorStore((s) => s.gpuBackend);
+
+  // Decoupled telemetry: zero re-render ripple
+  const fps = useHotMetrics((m) => m.fps);
+  const zoom = useHotMetrics((m) => m.zoom);
+
+  // Stable action references
+  const setZoom = useEditorStore((s) => s.setZoom);
+  const resetView = useEditorStore((s) => s.resetView);
+  const toggleRulers = useEditorStore((s) => s.toggleRulers);
+  const undo = useEditorStore((s) => s.undo);
+  const redo = useEditorStore((s) => s.redo);
+  const setNewDocModalOpen = useEditorStore((s) => s.setNewDocModalOpen);
+  const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
+  const addLayer = useEditorStore((s) => s.addLayer);
+  const duplicateLayer = useEditorStore((s) => s.duplicateLayer);
+  const invertLayerColors = useEditorStore((s) => s.invertLayerColors);
+  const desaturateLayer = useEditorStore((s) => s.desaturateLayer);
+  const clearSelection = useEditorStore((s) => s.clearSelection);
 
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const canUndo = historyIndex > 0;
-  const canRedo = historyIndex < history.length - 1;
 
   // Handle outside clicks to close dropdown menus
   useEffect(() => {
@@ -405,4 +405,4 @@ export const TopMenuBar: React.FC = () => {
       </div>
     </header>
   );
-};
+});

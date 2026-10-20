@@ -1,9 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
 import { X, Download, FileImage, Check } from 'lucide-react';
 import { useEditorStore } from '@/store/useEditorStore';
+import { getCanvasExportProvider } from '@/canvas/canvasBridge';
+import { showToast } from '@/store/toastStore';
 
-export const ExportModal: React.FC = () => {
-  const { isExportModalOpen, setExportModalOpen, docTitle, docWidth, docHeight } = useEditorStore();
+export const ExportModal: React.FC = memo(() => {
+  const isExportModalOpen = useEditorStore((s) => s.isExportModalOpen);
+  const setExportModalOpen = useEditorStore((s) => s.setExportModalOpen);
+  const docTitle = useEditorStore((s) => s.docTitle);
+  const docWidth = useEditorStore((s) => s.docWidth);
+  const docHeight = useEditorStore((s) => s.docHeight);
+  const backgroundColor = useEditorStore((s) => s.backgroundColor);
 
   const [filename, setFilename] = useState(docTitle.replace('.psai', ''));
   const [format, setFormat] = useState<'png' | 'jpeg' | 'webp'>('png');
@@ -12,28 +19,107 @@ export const ExportModal: React.FC = () => {
 
   if (!isExportModalOpen) return null;
 
-  const handleExport = () => {
+  const handleExport = async () => {
     setIsExporting(true);
 
-    // Find the canvas element in DOM
-    const canvas = document.querySelector('canvas');
-    if (canvas) {
-      const mime = format === 'png' ? 'image/png' : format === 'jpeg' ? 'image/jpeg' : 'image/webp';
-      const dataUrl = canvas.toDataURL(mime, quality);
+    const provider = getCanvasExportProvider();
+    const app = provider?.getApp();
+    const worldContainer = provider?.getWorldContainer();
 
-      // Trigger actual download
+    if (!provider || !app || !worldContainer) {
+      showToast('Không tìm thấy khung vẽ Pixi để xuất ảnh', 'error');
+      setIsExporting(false);
+      return;
+    }
+
+    const selectionGfx = provider.getSelectionGraphics();
+    const transformBox = provider.getTransformBox();
+    const drawingGfx = provider.getDrawingGraphics();
+    const artboardBg = provider.getArtboardBg?.() || null;
+
+    // 1. Temporarily hide UI overlays and artboard background (if transparent) before render extraction
+    const prevSelectionVisible = selectionGfx ? selectionGfx.visible : false;
+    const prevTransformVisible = transformBox ? transformBox.visible : false;
+    const prevDrawingVisible = drawingGfx ? drawingGfx.visible : false;
+    const prevArtboardVisible = artboardBg ? artboardBg.visible : true;
+
+    if (selectionGfx) selectionGfx.visible = false;
+    if (transformBox) transformBox.visible = false;
+    if (drawingGfx) drawingGfx.visible = false;
+    if (artboardBg && backgroundColor === 'transparent' && (format === 'png' || format === 'webp')) {
+      artboardBg.visible = false;
+    }
+
+    try {
+      // 2. Extract canvas with exact document dimensions
+      interface ExtractableRenderer {
+        extract?: {
+          canvas: (
+            target: unknown,
+            options?: { width?: number; height?: number }
+          ) => HTMLCanvasElement | Promise<HTMLCanvasElement>;
+        };
+      }
+
+      const renderer = app.renderer as unknown as ExtractableRenderer;
+
+      if (!renderer?.extract || typeof renderer.extract.canvas !== 'function') {
+        throw new Error('Tính năng app.renderer.extract.canvas không khả dụng');
+      }
+
+      const canvasOrPromise = renderer.extract.canvas(worldContainer, {
+        width: docWidth,
+        height: docHeight,
+      });
+
+      const extractedCanvas =
+        canvasOrPromise instanceof Promise ? await canvasOrPromise : canvasOrPromise;
+
+      if (!extractedCanvas || typeof extractedCanvas.toDataURL !== 'function') {
+        throw new Error('Canvas trích xuất không hợp lệ');
+      }
+
+      let finalCanvas = extractedCanvas;
+      if (format === 'jpeg') {
+        const bgCanvas = document.createElement('canvas');
+        bgCanvas.width = extractedCanvas.width;
+        bgCanvas.height = extractedCanvas.height;
+        const bgCtx = bgCanvas.getContext('2d');
+        if (bgCtx) {
+          bgCtx.fillStyle = '#ffffff';
+          bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
+          bgCtx.drawImage(extractedCanvas, 0, 0);
+          finalCanvas = bgCanvas;
+        }
+      }
+
+      // 3. Generate data URL & trigger download
+      const mime =
+        format === 'png' ? 'image/png' : format === 'jpeg' ? 'image/jpeg' : 'image/webp';
+      const dataUrl = finalCanvas.toDataURL(mime, quality);
+
       const link = document.createElement('a');
       link.download = `${filename}.${format}`;
       link.href = dataUrl;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-    }
 
-    setTimeout(() => {
-      setIsExporting(false);
+      showToast(`Đã xuất ảnh thành công: ${filename}.${format}`, 'success');
       setExportModalOpen(false);
-    }, 400);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Lỗi không xác định khi xuất ảnh';
+      console.error('[ExportModal] Export failed:', err);
+      showToast(`Lỗi xuất ảnh: ${errMsg}`, 'error');
+    } finally {
+      // 4. Restore visible states of all UI layers
+      if (selectionGfx) selectionGfx.visible = prevSelectionVisible;
+      if (transformBox) transformBox.visible = prevTransformVisible;
+      if (drawingGfx) drawingGfx.visible = prevDrawingVisible;
+      if (artboardBg) artboardBg.visible = prevArtboardVisible;
+
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -136,4 +222,4 @@ export const ExportModal: React.FC = () => {
       </div>
     </div>
   );
-};
+});

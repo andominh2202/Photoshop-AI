@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo, useCallback } from 'react';
 import {
   Eye,
   EyeOff,
@@ -17,7 +17,8 @@ import {
   Check,
   PaintBucket,
 } from 'lucide-react';
-import { useEditorStore, BlendModeType } from '@/store/useEditorStore';
+import { useEditorStore, BlendModeType, LayerItem } from '@/store/useEditorStore';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 const BLEND_MODES: { value: BlendModeType; label: string }[] = [
   { value: 'normal', label: 'Normal' },
@@ -31,67 +32,235 @@ const BLEND_MODES: { value: BlendModeType; label: string }[] = [
   { value: 'difference', label: 'Difference' },
 ];
 
-export const LayerPanel: React.FC = () => {
-  const {
-    layers,
-    activeLayerId,
-    setActiveLayer,
-    addLayer,
-    addTextLayer,
-    duplicateLayer,
-    removeLayer,
-    renameLayer,
-    moveLayerUp,
-    moveLayerDown,
-    mergeDown,
-    toggleLayerVisibility,
-    toggleLayerLock,
-    setLayerOpacity,
-    setLayerBlendMode,
-    updateLayerText,
-    fillActiveLayer,
-    brushColor,
-    invertLayerColors,
-    desaturateLayer,
-  } = useEditorStore();
+interface LayerRowProps {
+  layer: LayerItem;
+  isActive: boolean;
+  isEditing: boolean;
+  onSelect: (id: string) => void;
+  onToggleVisibility: (id: string) => void;
+  onToggleLock: (id: string) => void;
+  onStartRename: (id: string, name: string) => void;
+  onCommitRename: (name: string) => void;
+  onCancelRename: () => void;
+  onRemove: (id: string) => void;
+}
+
+// Memoized individual layer row: only re-renders when its own layer data or active state changes
+const LayerRow = memo<LayerRowProps>(
+  ({
+    layer,
+    isActive,
+    isEditing,
+    onSelect,
+    onToggleVisibility,
+    onToggleLock,
+    onStartRename,
+    onCommitRename,
+    onCancelRename,
+    onRemove,
+  }) => {
+    const [localName, setLocalName] = useState(layer.name);
+    const inputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+      if (isEditing) {
+        setLocalName(layer.name);
+        setTimeout(() => {
+          inputRef.current?.focus();
+          inputRef.current?.select();
+        }, 10);
+      }
+    }, [isEditing, layer.name]);
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        onCommitRename(localName);
+      } else if (e.key === 'Escape') {
+        onCancelRename();
+      }
+    };
+
+    return (
+      <div
+        onClick={() => onSelect(layer.id)}
+        className={`group flex items-center gap-2 px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer h-[48px] select-none ${
+          isActive
+            ? 'bg-blue-600/20 border-blue-500/50 text-zinc-100 shadow-sm'
+            : 'bg-zinc-900/60 border-zinc-800/60 text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
+        }`}
+      >
+        {/* Visibility Toggle */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleVisibility(layer.id);
+          }}
+          className="p-1 hover:text-zinc-100 rounded cursor-pointer shrink-0"
+          title={layer.visible ? 'Hide layer' : 'Show layer'}
+        >
+          {layer.visible ? (
+            <Eye className="w-3.5 h-3.5 text-zinc-300" />
+          ) : (
+            <EyeOff className="w-3.5 h-3.5 text-zinc-600" />
+          )}
+        </button>
+
+        {/* Lock Toggle */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleLock(layer.id);
+          }}
+          className="p-1 hover:text-zinc-100 rounded cursor-pointer shrink-0"
+          title={layer.locked ? 'Unlock layer' : 'Lock layer'}
+        >
+          {layer.locked ? (
+            <Lock className="w-3 h-3 text-amber-500" />
+          ) : (
+            <Unlock className="w-3 h-3 text-zinc-600 opacity-30 hover:opacity-100" />
+          )}
+        </button>
+
+        {/* Layer Thumbnail */}
+        <div className="w-8 h-8 rounded bg-zinc-800 border border-zinc-700/60 overflow-hidden flex items-center justify-center shrink-0 checkerboard-pattern">
+          {layer.type === 'text' ? (
+            <Type className="w-4 h-4 text-blue-400" />
+          ) : layer.textureUrl ? (
+            <img
+              src={layer.textureUrl}
+              alt={layer.name}
+              loading="lazy"
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <SlidersHorizontal className="w-4 h-4 text-zinc-500" />
+          )}
+        </div>
+
+        {/* Layer Title (Double Click to Rename) */}
+        <div className="flex-1 min-w-0 flex flex-col justify-center">
+          {isEditing ? (
+            <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+              <input
+                ref={inputRef}
+                type="text"
+                value={localName}
+                onChange={(e) => setLocalName(e.target.value)}
+                onBlur={() => onCommitRename(localName)}
+                onKeyDown={handleKeyDown}
+                className="w-full bg-zinc-800 border border-blue-500 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+              />
+              <button
+                onClick={() => onCommitRename(localName)}
+                className="p-1 bg-blue-600 rounded text-white hover:bg-blue-500 cursor-pointer shrink-0"
+              >
+                <Check className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <div
+              onDoubleClick={() => onStartRename(layer.id, layer.name)}
+              className="flex items-center justify-between"
+            >
+              <span
+                className="truncate font-medium text-[12px] hover:text-blue-300"
+                title="Double click to rename"
+              >
+                {layer.name}
+              </span>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStartRename(layer.id, layer.name);
+                }}
+                className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-zinc-100 text-zinc-500 cursor-pointer shrink-0"
+                title="Rename Layer"
+              >
+                <Edit2 className="w-2.5 h-2.5" />
+              </button>
+            </div>
+          )}
+          <span className="text-[10px] text-zinc-500 capitalize">
+            {layer.blendMode} • {Math.round(layer.opacity * 100)}%
+          </span>
+        </div>
+
+        {/* Delete Layer Button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove(layer.id);
+          }}
+          className="p-1 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition cursor-pointer shrink-0"
+          title="Delete Layer"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  }
+);
+
+export const LayerPanel: React.FC = memo(() => {
+  // Narrow selectors: isolated subscriptions
+  const layers = useEditorStore((s) => s.layers);
+  const activeLayerId = useEditorStore((s) => s.activeLayerId);
+  const brushColor = useEditorStore((s) => s.brushColor);
+
+  // Stable action references (never cause re-render)
+  const setActiveLayer = useEditorStore((s) => s.setActiveLayer);
+  const addLayer = useEditorStore((s) => s.addLayer);
+  const addTextLayer = useEditorStore((s) => s.addTextLayer);
+  const duplicateLayer = useEditorStore((s) => s.duplicateLayer);
+  const removeLayer = useEditorStore((s) => s.removeLayer);
+  const renameLayer = useEditorStore((s) => s.renameLayer);
+  const moveLayerUp = useEditorStore((s) => s.moveLayerUp);
+  const moveLayerDown = useEditorStore((s) => s.moveLayerDown);
+  const mergeDown = useEditorStore((s) => s.mergeDown);
+  const toggleLayerVisibility = useEditorStore((s) => s.toggleLayerVisibility);
+  const toggleLayerLock = useEditorStore((s) => s.toggleLayerLock);
+  const setLayerOpacity = useEditorStore((s) => s.setLayerOpacity);
+  const setLayerBlendMode = useEditorStore((s) => s.setLayerBlendMode);
+  const updateLayerText = useEditorStore((s) => s.updateLayerText);
+  const fillActiveLayer = useEditorStore((s) => s.fillActiveLayer);
+  const invertLayerColors = useEditorStore((s) => s.invertLayerColors);
+  const desaturateLayer = useEditorStore((s) => s.desaturateLayer);
 
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
 
   const activeLayer = layers.find((l) => l.id === activeLayerId) || layers[0];
 
-  useEffect(() => {
-    if (editingLayerId && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editingLayerId]);
+  // Virtualizer for smooth 60 FPS scrolling with large layer counts (up to 100+ layers)
+  const rowVirtualizer = useVirtualizer({
+    count: layers.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 52,
+    overscan: 4,
+  });
 
-  const startRename = (id: string, currentName: string) => {
+  const handleStartRename = useCallback((id: string) => {
     setEditingLayerId(id);
-    setEditingName(currentName);
-  };
+  }, []);
 
-  const commitRename = () => {
-    if (editingLayerId && editingName.trim()) {
-      renameLayer(editingLayerId, editingName.trim());
-    }
-    setEditingLayerId(null);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      commitRename();
-    } else if (e.key === 'Escape') {
+  const handleCommitRename = useCallback(
+    (name: string) => {
+      if (editingLayerId && name.trim()) {
+        renameLayer(editingLayerId, name.trim());
+      }
       setEditingLayerId(null);
-    }
-  };
+    },
+    [editingLayerId, renameLayer]
+  );
+
+  const handleCancelRename = useCallback(() => {
+    setEditingLayerId(null);
+  }, []);
 
   return (
     <div className="flex flex-col h-full bg-zinc-950 text-xs text-zinc-300 select-none">
       {/* 1. Panel Header */}
-      <div className="px-3 py-2 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/40">
+      <div className="px-3 py-2 border-b border-zinc-800/80 flex items-center justify-between bg-zinc-900/40 shrink-0">
         <div className="flex items-center gap-1.5 font-semibold text-zinc-200">
           <Layers className="w-4 h-4 text-blue-400" />
           <span>Layers</span>
@@ -138,7 +307,7 @@ export const LayerPanel: React.FC = () => {
 
       {/* 2. Layer Options: Blend Mode & Opacity */}
       {activeLayer && (
-        <div className="p-3 border-b border-zinc-800/80 space-y-2.5 bg-zinc-900/30">
+        <div className="p-3 border-b border-zinc-800/80 space-y-2.5 bg-zinc-900/30 shrink-0">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[11px] text-zinc-400 font-medium">Blend Mode</span>
             <select
@@ -190,136 +359,51 @@ export const LayerPanel: React.FC = () => {
         </div>
       )}
 
-      {/* 3. Layers Stack List */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-        {layers.map((layer) => {
-          const isActive = layer.id === activeLayerId;
-          const isEditing = editingLayerId === layer.id;
+      {/* 3. Virtualized Layers Stack List */}
+      <div ref={parentRef} className="flex-1 overflow-y-auto p-2">
+        <div
+          style={{
+            height: `${rowVirtualizer.getTotalSize()}px`,
+            width: '100%',
+            position: 'relative',
+          }}
+        >
+          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+            const layer = layers[virtualRow.index];
+            if (!layer) return null;
 
-          return (
-            <div
-              key={layer.id}
-              onClick={() => setActiveLayer(layer.id)}
-              className={`group flex items-center gap-2 px-2.5 py-2 rounded-lg border transition-all cursor-pointer ${
-                isActive
-                  ? 'bg-blue-600/20 border-blue-500/50 text-zinc-100 shadow-sm'
-                  : 'bg-zinc-900/60 border-zinc-800/60 text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
-              }`}
-            >
-              {/* Visibility Toggle */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleLayerVisibility(layer.id);
+            return (
+              <div
+                key={layer.id}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${virtualRow.start}px)`,
                 }}
-                className="p-1 hover:text-zinc-100 rounded cursor-pointer"
-                title={layer.visible ? 'Hide layer' : 'Show layer'}
               >
-                {layer.visible ? (
-                  <Eye className="w-3.5 h-3.5 text-zinc-300" />
-                ) : (
-                  <EyeOff className="w-3.5 h-3.5 text-zinc-600" />
-                )}
-              </button>
-
-              {/* Lock Toggle */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleLayerLock(layer.id);
-                }}
-                className="p-1 hover:text-zinc-100 rounded cursor-pointer"
-                title={layer.locked ? 'Unlock layer' : 'Lock layer'}
-              >
-                {layer.locked ? (
-                  <Lock className="w-3 h-3 text-amber-500" />
-                ) : (
-                  <Unlock className="w-3 h-3 text-zinc-600 opacity-30 hover:opacity-100" />
-                )}
-              </button>
-
-              {/* Layer Thumbnail */}
-              <div className="w-8 h-8 rounded bg-zinc-800 border border-zinc-700/60 overflow-hidden flex items-center justify-center shrink-0 checkerboard-pattern">
-                {layer.type === 'text' ? (
-                  <Type className="w-4 h-4 text-blue-400" />
-                ) : layer.textureUrl ? (
-                  <img
-                    src={layer.textureUrl}
-                    alt={layer.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <SlidersHorizontal className="w-4 h-4 text-zinc-500" />
-                )}
+                <LayerRow
+                  layer={layer}
+                  isActive={layer.id === activeLayerId}
+                  isEditing={editingLayerId === layer.id}
+                  onSelect={setActiveLayer}
+                  onToggleVisibility={toggleLayerVisibility}
+                  onToggleLock={toggleLayerLock}
+                  onStartRename={handleStartRename}
+                  onCommitRename={handleCommitRename}
+                  onCancelRename={handleCancelRename}
+                  onRemove={removeLayer}
+                />
               </div>
-
-              {/* Layer Title (Double Click or Edit icon to Rename) */}
-              <div className="flex-1 min-w-0 flex flex-col justify-center">
-                {isEditing ? (
-                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    <input
-                      ref={inputRef}
-                      type="text"
-                      value={editingName}
-                      onChange={(e) => setEditingName(e.target.value)}
-                      onBlur={commitRename}
-                      onKeyDown={handleKeyDown}
-                      className="w-full bg-zinc-800 border border-blue-500 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                    />
-                    <button
-                      onClick={commitRename}
-                      className="p-1 bg-blue-600 rounded text-white hover:bg-blue-500 cursor-pointer"
-                    >
-                      <Check className="w-3 h-3" />
-                    </button>
-                  </div>
-                ) : (
-                  <div
-                    onDoubleClick={() => startRename(layer.id, layer.name)}
-                    className="flex items-center justify-between"
-                  >
-                    <span
-                      className="truncate font-medium text-[12px] hover:text-blue-300"
-                      title="Double click to rename"
-                    >
-                      {layer.name}
-                    </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startRename(layer.id, layer.name);
-                      }}
-                      className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-zinc-100 text-zinc-500 cursor-pointer"
-                      title="Rename Layer"
-                    >
-                      <Edit2 className="w-2.5 h-2.5" />
-                    </button>
-                  </div>
-                )}
-                <span className="text-[10px] text-zinc-500 capitalize">
-                  {layer.blendMode} • {Math.round(layer.opacity * 100)}%
-                </span>
-              </div>
-
-              {/* Delete Layer Button (Always accessible) */}
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeLayer(layer.id);
-                }}
-                className="p-1 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded transition cursor-pointer"
-                title="Delete Layer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       {/* 4. Quick Layer Actions: Invert, B&W, Fill */}
       {activeLayer && (
-        <div className="px-3 py-1.5 border-t border-zinc-800/60 bg-zinc-900/30 flex items-center justify-between text-[11px]">
+        <div className="px-3 py-1.5 border-t border-zinc-800/60 bg-zinc-900/30 flex items-center justify-between text-[11px] shrink-0">
           <span className="text-zinc-500">Quick FX:</span>
           <div className="flex items-center gap-1.5">
             <button
@@ -349,9 +433,8 @@ export const LayerPanel: React.FC = () => {
       )}
 
       {/* 5. Photoshop Standard Panel Footer Controls */}
-      <div className="p-2 border-t border-zinc-800/80 flex items-center justify-between bg-zinc-900/50">
+      <div className="p-2 border-t border-zinc-800/80 flex items-center justify-between bg-zinc-900/50 shrink-0">
         <div className="flex items-center gap-1">
-          {/* Delete Active Layer Trash Icon */}
           <button
             onClick={() => {
               if (activeLayer) removeLayer(activeLayer.id);
@@ -361,8 +444,6 @@ export const LayerPanel: React.FC = () => {
           >
             <Trash2 className="w-4 h-4" />
           </button>
-
-          {/* Duplicate Active Layer */}
           <button
             onClick={() => {
               if (activeLayer) duplicateLayer(activeLayer.id);
@@ -375,7 +456,6 @@ export const LayerPanel: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-1.5">
-          {/* New Text Layer */}
           <button
             onClick={() => addTextLayer('PhotoshopAI Text')}
             className="flex items-center gap-1 px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded border border-zinc-700/60 cursor-pointer font-medium transition"
@@ -384,8 +464,6 @@ export const LayerPanel: React.FC = () => {
             <Type className="w-3.5 h-3.5 text-blue-400" />
             <span>Type</span>
           </button>
-
-          {/* New Blank Layer */}
           <button
             onClick={() => addLayer()}
             className="flex items-center gap-1 px-3 py-1 bg-blue-600 hover:bg-blue-500 active:scale-95 text-white text-xs rounded shadow-sm cursor-pointer font-medium transition"
@@ -398,4 +476,4 @@ export const LayerPanel: React.FC = () => {
       </div>
     </div>
   );
-};
+});

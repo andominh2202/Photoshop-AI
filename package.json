@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "start": "node electron/run-desktop.cjs",
     "app": "node electron/run-desktop.cjs",
@@ -16,8 +17,39 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
+  "build": {
+    "appId": "com.photoshopai.app",
+    "productName": "PhotoshopAI",
+    "asar": true,
+    "compression": "maximum",
+    "publish": {
+      "provider": "github",
+      "owner": "andominh2202",
+      "repo": "Photoshop-AI"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "!dist/stats.html",
+      "!src/**/*",
+      "!src-tauri/**/*",
+      "!**/*.bat",
+      "!**/*.test.*",
+      "!**/__tests__/**"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "directories": {
+      "output": "release"
+    }
+  },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^1.57.0",
     "pixi.js": "^8.22.0",
     "react": "^19.3.1",
@@ -26,20 +58,24 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "@tauri-apps/cli": "^2.12.4",
+    "@tanstack/react-virtual": "^3.14.21",
+    "@tauri-apps/cli": "^2.12.3",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "@vitest/coverage-v8": "^5.0.5",
     "autoprefixer": "^10.6.1",
     "concurrently": "^10.0.6",
     "cross-env": "^10.1.0",
     "electron": "^44.7.2",
     "esbuild": "^0.28.2",
     "postcss": "^8.5.30",
+    "rollup-plugin-visualizer": "^7.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
+    "vitest": "^5.0.5",
     "wait-on": "^9.5.1"
   }
 }
